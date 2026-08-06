@@ -104,78 +104,93 @@ class _ClientScreenState extends State<ClientScreen> {
       );
     }
 
+    final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Modo Cliente')),
-      body: Padding(
+      body: ListView(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Tu nombre'),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                const Expanded(child: Text('Hosts en la red local:')),
-                OutlinedButton(
-                  onPressed: _scanning ? null : _scan,
-                  child: _scanning
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Buscar'),
+        children: [
+          TextField(
+            controller: _nameController,
+            decoration: const InputDecoration(labelText: 'Tu nombre'),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Hosts en la red local',
+                  style: TextStyle(fontWeight: FontWeight.w600, color: colors.onSurface),
                 ),
-              ],
-            ),
-            if (_discovered.isEmpty && !_scanning)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text('Ningún host encontrado todavía.'),
               ),
-            for (final host in _discovered)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(host.name),
-                subtitle: Text('${host.address}:${host.port}'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _selectDiscovered(host),
+              OutlinedButton.icon(
+                onPressed: _scanning ? null : _scan,
+                icon: _scanning
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.search, size: 18),
+                label: const Text('Buscar'),
               ),
-            const Divider(height: 32),
-            const Text('...o ingresá la IP a mano:'),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _ipController,
-              decoration: const InputDecoration(labelText: 'IP del host'),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _portController,
-              decoration: const InputDecoration(labelText: 'Puerto'),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 16),
-            if (_error != null) ...[
-              Text(_error!, style: const TextStyle(color: Colors.red)),
-              const SizedBox(height: 16),
             ],
-            ElevatedButton(
-              onPressed: _connecting ? null : _connect,
-              child: _connecting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Conectar'),
+          ),
+          const SizedBox(height: 8),
+          if (_discovered.isEmpty && !_scanning)
+            Text(
+              'Ningún host encontrado todavía.',
+              style: TextStyle(color: colors.onSurfaceVariant),
             ),
+          if (_discovered.isNotEmpty)
+            Container(
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  for (final host in _discovered)
+                    ListTile(
+                      title: Text(host.name),
+                      subtitle: Text('${host.address}:${host.port}'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => _selectDiscovered(host),
+                    ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 24),
+          Text('...o ingresá la IP a mano', style: TextStyle(color: colors.onSurfaceVariant)),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _ipController,
+            decoration: const InputDecoration(labelText: 'IP del host'),
+            keyboardType: TextInputType.number,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _portController,
+            decoration: const InputDecoration(labelText: 'Puerto'),
+            keyboardType: TextInputType.number,
+          ),
+          const SizedBox(height: 20),
+          if (_error != null) ...[
+            Text(_error!, style: TextStyle(color: colors.error)),
+            const SizedBox(height: 16),
           ],
-        ),
+          FilledButton(
+            onPressed: _connecting ? null : _connect,
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+            child: _connecting
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Conectar'),
+          ),
+        ],
       ),
     );
   }

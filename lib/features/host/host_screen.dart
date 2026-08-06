@@ -78,6 +78,7 @@ class _HostScreenState extends State<HostScreen> {
       );
     }
 
+    final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Modo Host')),
       body: Padding(
@@ -89,23 +90,39 @@ class _HostScreenState extends State<HostScreen> {
               'Va a levantar un servidor WebSocket en el puerto '
               '${ChatHostServer.defaultPort}. Los clientes se conectan a la '
               'IP de este dispositivo en ese puerto.',
+              style: TextStyle(color: colors.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
             if (_localAddresses.isNotEmpty) ...[
-              const Text('IPs locales detectadas:'),
-              for (final addr in _localAddresses) Text('  • $addr'),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('IPs locales detectadas', style: TextStyle(fontWeight: FontWeight.w600, color: colors.onSurface)),
+                    const SizedBox(height: 4),
+                    for (final addr in _localAddresses) Text(addr, style: TextStyle(color: colors.onSurfaceVariant)),
+                  ],
+                ),
+              ),
               const SizedBox(height: 16),
             ],
             if (_error != null) ...[
-              Text(_error!, style: const TextStyle(color: Colors.red)),
+              Text(_error!, style: TextStyle(color: colors.error)),
               const SizedBox(height: 16),
             ],
-            ElevatedButton(
+            FilledButton(
               onPressed: _starting ? null : _startHost,
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
               child: _starting
                   ? const SizedBox(
-                      width: 16,
-                      height: 16,
+                      width: 18,
+                      height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Text('Iniciar host'),
