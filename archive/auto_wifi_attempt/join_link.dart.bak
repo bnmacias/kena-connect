@@ -1,0 +1,45 @@
+import 'connection_code.dart';
+
+/// Lo que puede venir codificado en un QR de invitación: siempre el
+/// código de la sala y, sólo si el anfitrión armó su propia red (no había
+/// ninguna Wi-Fi existente — ver `LocalHotspot`), también sus credenciales,
+/// para que quien escanea pueda unirse a esa red solo, sin tipear nada.
+class JoinLink {
+  final String code;
+  final String? ssid;
+  final String? password;
+
+  const JoinLink({required this.code, this.ssid, this.password});
+
+  bool get hasWifiCredentials => ssid != null && password != null;
+
+  /// Formato propio (`kena://join?...`) en vez de JSON/texto plano: así un
+  /// QR "viejo" (sólo el código, de una versión anterior de Kena) y uno
+  /// nuevo se distinguen con un solo chequeo de esquema, sin ambigüedad
+  /// con lo que alguien podría tipear a mano en el campo de código.
+  String encode() {
+    if (ssid == null || password == null) return code;
+    return Uri(
+      scheme: 'kena',
+      host: 'join',
+      queryParameters: {'code': code, 'ssid': ssid, 'pwd': password},
+    ).toString();
+  }
+
+  /// Acepta tanto el formato nuevo como un QR/código plano de una versión
+  /// anterior — en ese caso [ssid]/[password] quedan `null` y quien llama
+  /// sigue el flujo de siempre (asumir que ya está en la misma red).
+  static JoinLink parse(String raw) {
+    final uri = Uri.tryParse(raw.trim());
+    if (uri != null && uri.scheme == 'kena' && uri.host == 'join') {
+      final code = normalizeConnectionCode(uri.queryParameters['code'] ?? '');
+      final ssid = uri.queryParameters['ssid'];
+      final pwd = uri.queryParameters['pwd'];
+      if (code.isNotEmpty && ssid != null && ssid.isNotEmpty && pwd != null && pwd.isNotEmpty) {
+        return JoinLink(code: code, ssid: ssid, password: pwd);
+      }
+      return JoinLink(code: code);
+    }
+    return JoinLink(code: normalizeConnectionCode(raw));
+  }
+}

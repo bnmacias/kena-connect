@@ -1,106 +1,98 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
-import 'features/client/client_screen.dart';
-import 'features/host/host_screen.dart';
+import 'core/notifications/notification_service.dart';
+import 'features/room/chat_thread_screen.dart';
+import 'features/room/domain/active_room_registry.dart';
+import 'features/root_screen.dart';
+import 'theme/kena_colors.dart';
+import 'theme/kena_theme_controller.dart';
+import 'widgets/connection_banner.dart';
 
-const _seedColor = Color(0xFF3A6FD8);
-
-ThemeData _buildTheme(Brightness brightness) {
-  final colorScheme = ColorScheme.fromSeed(seedColor: _seedColor, brightness: brightness);
-  return ThemeData(
-    useMaterial3: true,
-    colorScheme: colorScheme,
-    inputDecorationTheme: InputDecorationTheme(
-      filled: true,
-      fillColor: colorScheme.surfaceContainerHighest,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide.none,
-      ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-    ),
-  );
-}
-
-void main() {
+Future<void> main() async {
+  // Restaura el tema guardado (si había uno) antes de armar la primera
+  // pantalla — así se evita un parpadeo del tema default seguido de un
+  // cambio al tema guardado apenas carga SharedPreferences.
+  WidgetsFlutterBinding.ensureInitialized();
+  await KenaThemeController.instance.load();
   runApp(const KenaApp());
 }
 
-class KenaApp extends StatelessWidget {
+/// Navegación fuera del árbol de widgets — hace falta para abrir un chat
+/// desde el toque de una notificación, que dispara en un callback sin
+/// ningún `BuildContext` propio (ver `NotificationService.taps`).
+final navigatorKey = GlobalKey<NavigatorState>();
+
+class KenaApp extends StatefulWidget {
   const KenaApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Kena Connect',
-      themeMode: ThemeMode.system,
-      theme: _buildTheme(Brightness.light),
-      darkTheme: _buildTheme(Brightness.dark),
-      home: const ModeSelectionScreen(),
-    );
-  }
+  State<KenaApp> createState() => _KenaAppState();
 }
 
-class ModeSelectionScreen extends StatelessWidget {
-  const ModeSelectionScreen({super.key});
+class _KenaAppState extends State<KenaApp> {
+  StreamSubscription<String>? _tapSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _tapSub = NotificationService.instance.taps.listen(_openThread);
+    // MaterialApp.theme se arma a partir del tema activo (ver build()) —
+    // sin este listener, el ThemeData quedaría fijo al de arranque para
+    // siempre, y los widgets de Material estándar (TextField, Switch,
+    // RadioListTile del picker de transferencia, etc.) no seguirían un
+    // cambio de tema aunque KenaBackground sí lo haga en cada pantalla.
+    KenaThemeController.instance.addListener(_onThemeChanged);
+  }
+
+  void _onThemeChanged() => setState(() {});
+
+  @override
+  void dispose() {
+    _tapSub?.cancel();
+    KenaThemeController.instance.removeListener(_onThemeChanged);
+    super.dispose();
+  }
+
+  /// Sólo funciona si hay una sesión de sala viva ahora mismo
+  /// (`ActiveRoomRegistry`) — cubre tocar la notificación con la app en
+  /// foreground o en segundo plano real (gracias al foreground service),
+  /// que es el caso común. Si la app estaba totalmente cerrada, no hay
+  /// sesión que abrir todavía en este momento — ver la nota en
+  /// `NotificationService.taps`.
+  void _openThread(String threadKey) {
+    final session = ActiveRoomRegistry.current.value;
+    if (session == null) return;
+    final navigator = navigatorKey.currentState;
+    if (navigator == null) return;
+    final peerId = threadKey == '__general__' ? null : threadKey;
+    navigator.push(
+      MaterialPageRoute(builder: (_) => ChatThreadScreen(session: session, peerId: peerId)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 88,
-                height: 88,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: colors.primaryContainer,
-                ),
-                child: Icon(Icons.forum_outlined, size: 40, color: colors.onPrimaryContainer),
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'Kena Connect',
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Chat local sin conexión a internet',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: colors.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: 48),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52),
-                ),
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const HostScreen()),
-                ),
-                icon: const Icon(Icons.wifi_tethering),
-                label: const Text('Modo Host'),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52),
-                ),
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const ClientScreen()),
-                ),
-                icon: const Icon(Icons.search),
-                label: const Text('Modo Cliente'),
-              ),
-            ],
-          ),
+    // KenaThemeScope tiene que envolver todo el árbol: es lo que le
+    // permite a KenaBackground (una por pantalla) enterarse de un
+    // cambio de tema y reconstruirse — ver el doc comment de
+    // KenaBackground en theme/kena_colors.dart para el porqué.
+    return KenaThemeScope(
+      child: MaterialApp(
+        navigatorKey: navigatorKey,
+        title: 'Kena Connect',
+        theme: buildKenaTheme(KenaThemeController.instance.value),
+        home: const RootScreen(),
+        // Franja global de estado de conexión: montada una sola vez por
+        // encima de todo el Navigator, para que se vea en cualquier
+        // pantalla sin que cada una tenga que suscribirse a nada (ver
+        // ConnectionBanner y ARCHITECTURE.md).
+        builder: (context, child) => Stack(
+          children: [
+            ?child,
+            const ConnectionBanner(),
+          ],
         ),
       ),
     );

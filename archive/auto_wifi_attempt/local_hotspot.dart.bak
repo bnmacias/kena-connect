@@ -1,0 +1,107 @@
+import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+/// Credenciales del punto de acceso local recién creado — nunca se
+/// muestran como "SSID"/"contraseña" en la UI (jerga de red), sólo se
+/// usan para armar el texto humano de invitación si hace falta mostrarlo
+/// (p. ej. durante una migración de anfitrión sin red preexistente).
+class LocalHotspotResult {
+  final String ssid;
+  final String password;
+  const LocalHotspotResult({required this.ssid, required this.password});
+}
+
+/// No se pudo crear el punto de acceso — por SO no soportado, permiso
+/// denegado, o la API del sistema falló. Quien llama debe caer al flujo
+/// manual existente (`network_readiness.dart`: guiar a Configuración y
+/// esperar), nunca tratar esto como un error fatal.
+class LocalHotspotUnavailable implements Exception {
+  final String reason;
+  const LocalHotspotUnavailable(this.reason);
+
+  @override
+  String toString() => reason;
+}
+
+/// Wrapper de la única pieza nativa de Kena (`MainActivity.kt`, canal
+/// `kena/local_hotspot`): crear un punto de acceso Wi-Fi local sin
+/// Internet (`WifiManager.startLocalOnlyHotspot`, Android 8+) para armar
+/// la red de una sala cuando no existe ninguna todavía. No hay
+/// equivalente en iOS/desktop — ahí este método siempre falla con
+/// [LocalHotspotUnavailable] y la app cae al flujo manual, que sigue
+/// siendo el único camino en esas plataformas.
+class LocalHotspot {
+  LocalHotspot._();
+
+  static const _channel = MethodChannel('kena/local_hotspot');
+
+  static Future<LocalHotspotResult> start() async {
+    // `startLocalOnlyHotspot` exige el permiso de ubicación en tiempo de
+    // ejecución pase lo que pase (Kena no lo usa para nada más que esto)
+    // — a diferencia de otras APIs de Wi-Fi (scan, info de conexión),
+    // `NEARBY_WIFI_DEVICES` NO lo reemplaza para este método puntual
+    // (confirmado en dispositivo real: sin este permiso, la llamada
+    // nativa tira `SecurityException` aunque `NEARBY_WIFI_DEVICES` esté
+    // concedido). Sí reemplaza el otro requisito — ver más abajo.
+    final locationStatus = await Permission.locationWhenInUse.request();
+    if (!locationStatus.isGranted) {
+      throw const LocalHotspotUnavailable('Sin permiso de ubicación.');
+    }
+
+    // Android 13+: con `NEARBY_WIFI_DEVICES` concedido (declarado
+    // `neverForLocation` en el manifest), Android no exige además el
+    // interruptor de Ubicación del sistema prendido para esta API — sólo
+    // el permiso de arriba. En Android < 13 este permiso no existe
+    // (permission_handler lo trata como no aplicable/denegado) y no
+    // reemplaza nada, así que ahí el interruptor de Ubicación del sistema
+    // sigue siendo obligatorio.
+    bool nearbyWifiGranted = false;
+    try {
+      final nearbyStatus = await Permission.nearbyWifiDevices.request();
+      nearbyWifiGranted = nearbyStatus.isGranted;
+    } catch (_) {}
+
+    if (!nearbyWifiGranted) {
+      final serviceStatus = await Permission.locationWhenInUse.serviceStatus;
+      if (serviceStatus == ServiceStatus.disabled) {
+        throw const LocalHotspotUnavailable(
+          'La Ubicación del sistema está apagada. Activala en Ajustes → '
+          'Ubicación (no alcanza con el permiso de la app) y volvé a intentar.',
+        );
+      }
+    }
+
+    try {
+      // `startLocalOnlyHotspot` es un callback nativo que, en los hechos,
+      // puede no llegar a dispararse nunca en ciertos entornos (visto en
+      // un emulador Android real: el pedido llega al sistema pero el
+      // hardware de Wi-Fi virtual no completa ni onStarted ni onFailed) —
+      // sin este timeout, `_ensureNetworkReady` quedaría colgado para
+      // siempre en vez de caer al flujo manual.
+      final result = await _channel.invokeMapMethod<String, String>('start').timeout(
+        const Duration(seconds: 8),
+        onTimeout: () => throw const LocalHotspotUnavailable('El sistema no respondió a tiempo.'),
+      );
+      final ssid = result?['ssid'];
+      final password = result?['password'];
+      if (ssid == null || password == null) {
+        throw const LocalHotspotUnavailable('El sistema no devolvió las credenciales de la red.');
+      }
+      return LocalHotspotResult(ssid: ssid, password: password);
+    } on MissingPluginException {
+      throw const LocalHotspotUnavailable('No soportado en esta plataforma.');
+    } on PlatformException catch (e) {
+      throw LocalHotspotUnavailable(e.message ?? e.code);
+    }
+  }
+
+  static Future<void> stop() async {
+    try {
+      await _channel.invokeMethod('stop');
+    } on MissingPluginException {
+      // No soportado en esta plataforma: no había nada que parar.
+    } catch (_) {
+      // Nunca debería bloquear un flujo de salida por esto.
+    }
+  }
+}

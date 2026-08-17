@@ -1,0 +1,284 @@
+package com.flightchat.kena
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSpecifier
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import androidx.core.content.ContextCompat
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+
+/**
+ * Puente nativo mínimo para lo que no existe como API multiplataforma en
+ * Flutter: crear un punto de acceso Wi-Fi local (sin Internet) para armar
+ * la red de una sala, y unirse como cliente a una red conocida por
+ * SSID+contraseña sin que el usuario tenga que ir a Ajustes — ver
+ * ARCHITECTURE.md → "Preparación de red antes de crear una sala". El lado
+ * Dart vive en `core/network/local_hotspot.dart` y
+ * `core/network/wifi_joiner.dart` respectivamente.
+ *
+ * `WifiManager.LocalOnlyHotspotReservation` es la API real de Android para
+ * lo primero (8.0+): a diferencia de activar el "Hotspot personal" normal,
+ * no comparte Internet (Kena no lo necesita) y se apaga sola si esta app se
+ * cierra — coherente con que la red de Kena es temporal.
+ */
+class MainActivity : FlutterActivity() {
+    private val channelName = "kena/local_hotspot"
+    private val joinChannelName = "kena/wifi_join"
+    private val foregroundChannelName = "kena/foreground_service"
+    private var reservation: WifiManager.LocalOnlyHotspotReservation? = null
+    private var joinCallback: ConnectivityManager.NetworkCallback? = null
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> startHotspot(result)
+                    "stop" -> {
+                        stopHotspot()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, joinChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "join" -> {
+                        val ssid = call.argument<String>("ssid")
+                        val password = call.argument<String>("password")
+                        if (ssid.isNullOrEmpty() || password.isNullOrEmpty()) {
+                            result.error("BAD_ARGS", "Falta ssid o password.", null)
+                        } else {
+                            joinNetwork(ssid, password, result)
+                        }
+                    }
+                    "leave" -> {
+                        leaveNetwork()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, foregroundChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> {
+                        val roomName = call.argument<String>("roomName") ?: "tu sala"
+                        val intent = Intent(this, ChatForegroundService::class.java)
+                            .putExtra(ChatForegroundService.EXTRA_ROOM_NAME, roomName)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(intent)
+                        } else {
+                            startService(intent)
+                        }
+                        result.success(null)
+                    }
+                    "stop" -> {
+                        stopService(Intent(this, ChatForegroundService::class.java))
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /**
+     * Une este dispositivo, como cliente, a la red Wi-Fi [ssid] usando
+     * [password] — sin pedirle nada al usuario más que el toque de
+     * confirmación que Android exige por diseño (no se puede evitar desde
+     * Android 10 en adelante: es la misma protección de privacidad que
+     * impide que cualquier app conecte tu teléfono a redes sin que te
+     * enteres). Lo que sí evita es que el usuario tenga que salir a
+     * Ajustes y tipear la contraseña — ya viaja en el pedido.
+     *
+     * `WifiNetworkSpecifier` es la API pensada exactamente para esto
+     * (conexión "de compañero de app" a una red que no administrás) y, a
+     * diferencia de las APIs viejas de `WifiManager`, no exige permiso de
+     * ubicación.
+     */
+    private fun joinNetwork(ssid: String, password: String, result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            result.error("UNSUPPORTED", "Necesita Android 10 o superior.", null)
+            return
+        }
+        leaveNetwork() // por si quedó una conexión de un intento anterior.
+
+        val specifier = WifiNetworkSpecifier.Builder()
+            .setSsid(ssid)
+            .setWpa2Passphrase(password)
+            .build()
+
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .setNetworkSpecifier(specifier)
+            .build()
+
+        val connectivityManager =
+            applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        var settled = false
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                if (settled) return
+                settled = true
+                // Sin esto, el tráfico de la app (los sockets del chat
+                // incluidos) puede seguir saliendo por la red por defecto
+                // del teléfono (datos móviles) en vez de por esta — una
+                // red "sin Internet" nunca gana esa carrera sola.
+                connectivityManager.bindProcessToNetwork(network)
+                result.success(null)
+            }
+
+            override fun onUnavailable() {
+                if (settled) return
+                settled = true
+                result.error("UNAVAILABLE", "No se pudo conectar a la red del anfitrión (¿sigue encendida?).", null)
+            }
+        }
+        joinCallback = callback
+        // El timeout acá es lo que garantiza que `onUnavailable` se dispare
+        // solo si el usuario nunca confirma el diálogo del sistema o la red
+        // ya no está — sin él, un pedido que no se resuelve nunca deja
+        // colgado al lado Dart.
+        connectivityManager.requestNetwork(request, callback, 20_000)
+    }
+
+    private fun leaveNetwork() {
+        val connectivityManager =
+            applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        joinCallback?.let {
+            try {
+                connectivityManager.unregisterNetworkCallback(it)
+            } catch (_: IllegalArgumentException) {
+                // Ya se había liberado (p.ej. onUnavailable ya disparó) — no pasa nada.
+            }
+        }
+        joinCallback = null
+        try {
+            connectivityManager.bindProcessToNetwork(null)
+        } catch (_: Exception) {
+            // Nunca debería bloquear la salida de la sala por esto.
+        }
+    }
+
+    private fun startHotspot(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            result.error("UNSUPPORTED", "Este Android es demasiado viejo para crear un punto de acceso local.", null)
+            return
+        }
+        // Ya hay uno activo desde esta misma sesión de la app — no hace
+        // falta (ni se puede) pedir otro.
+        reservation?.let { existing ->
+            val info = describeReservation(existing)
+            if (info != null) {
+                result.success(info)
+                return
+            }
+        }
+
+        // Chequeo explícito y puntual, sin pasar por el permission_handler
+        // del lado Dart: desde Android 12, el usuario puede conceder
+        // Ubicación como "Aproximada" en vez de "Precisa" — eso alcanza
+        // para que `Permission.locationWhenInUse` del lado Dart la vea
+        // como "concedida" (lo es, técnicamente), pero `startLocalOnlyHotspot`
+        // exige específicamente ACCESS_FINE_LOCATION y rechaza el pedido
+        // con `SecurityException` si sólo hay Ubicación aproximada — lo que
+        // se veía como "Falta el permiso de ubicación" incluso después de
+        // aceptar el permiso. Se distingue este caso puntual para no
+        // repetir el mismo error engañoso.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            result.error(
+                "FINE_LOCATION",
+                "Kena tiene permiso de Ubicación, pero como \"Aproximada\" — hace falta \"Precisa\". " +
+                    "Ajustes del teléfono → Apps → Kena → Permisos → Ubicación → Precisa.",
+                null,
+            )
+            return
+        }
+
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        if (wifiManager == null) {
+            result.error("NO_WIFI_MANAGER", "No se pudo acceder al servicio de Wi-Fi del sistema.", null)
+            return
+        }
+
+        try {
+            wifiManager.startLocalOnlyHotspot(
+                object : WifiManager.LocalOnlyHotspotCallback() {
+                    override fun onStarted(res: WifiManager.LocalOnlyHotspotReservation) {
+                        reservation = res
+                        val info = describeReservation(res)
+                        if (info != null) {
+                            result.success(info)
+                        } else {
+                            result.error("NO_CONFIG", "El punto de acceso se activó pero no se pudo leer su nombre/contraseña.", null)
+                        }
+                    }
+
+                    override fun onStopped() {
+                        reservation = null
+                    }
+
+                    override fun onFailed(reasonCode: Int) {
+                        reservation = null
+                        result.error("FAILED", "No se pudo activar el punto de acceso local (código $reasonCode).", null)
+                    }
+                },
+                Handler(Looper.getMainLooper()),
+            )
+        } catch (e: SecurityException) {
+            result.error("PERMISSION", "Falta el permiso de ubicación que pide Android para esto.", null)
+        } catch (e: IllegalStateException) {
+            // P.ej. ya hay tethering/hotspot normal activo por otro lado.
+            result.error("FAILED", e.message ?: "No se pudo activar el punto de acceso local.", null)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun describeReservation(res: WifiManager.LocalOnlyHotspotReservation): Map<String, String>? {
+        // `getSoftApConfiguration()` (30+) es el reemplazo moderno de
+        // `getWifiConfiguration()` (deprecada, pero se mantiene como
+        // respaldo para versiones viejas donde es la única disponible).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val softApConfig = res.softApConfiguration
+            val ssid = softApConfig?.ssid
+            val passphrase = softApConfig?.passphrase
+            if (ssid != null && passphrase != null) {
+                return mapOf("ssid" to ssid, "password" to passphrase)
+            }
+        }
+        val legacy = res.wifiConfiguration
+        val ssid = legacy?.SSID?.trim('"')
+        val password = legacy?.preSharedKey?.trim('"')
+        if (ssid != null && password != null) {
+            return mapOf("ssid" to ssid, "password" to password)
+        }
+        return null
+    }
+
+    private fun stopHotspot() {
+        reservation?.close()
+        reservation = null
+    }
+
+    override fun onDestroy() {
+        stopHotspot()
+        leaveNetwork()
+        super.onDestroy()
+    }
+}

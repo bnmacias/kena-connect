@@ -1,8 +1,9 @@
 import 'dart:convert';
 
 /// Mensajes del protocolo de descubrimiento (UDP broadcast), separado del
-/// protocolo de chat: un cliente pregunta "¿hay algún host?" (DISCOVER) y
-/// cada host que escucha responde con su nombre y puerto (ANNOUNCE).
+/// protocolo de chat: un cliente pregunta "¿hay alguna conexión?" (DISCOVER)
+/// y cada anfitrión que escucha responde con el nombre/código de su
+/// conexión y el puerto de chat (ANNOUNCE).
 enum DiscoveryMessageType { discover, announce }
 
 extension _DiscoveryMessageTypeCodec on DiscoveryMessageType {
@@ -10,20 +11,23 @@ extension _DiscoveryMessageTypeCodec on DiscoveryMessageType {
 }
 
 class DiscoveryMessage {
-  static const int protocolVersion = 1;
+  static const int protocolVersion = 2;
 
-  /// Puerto UDP fijo en el que los hosts escuchan pedidos de descubrimiento.
-  /// Distinto del puerto del servidor de chat (que puede variar).
+  /// Puerto UDP fijo en el que los anfitriones escuchan pedidos de
+  /// descubrimiento. Distinto del puerto del servidor de chat (que puede
+  /// variar).
   static const int discoveryPort = 45892;
 
   final int version;
   final DiscoveryMessageType type;
-  final String hostName;
+  final String connectionName;
+  final String code;
   final int chatPort;
 
   DiscoveryMessage({
     required this.type,
-    required this.hostName,
+    required this.connectionName,
+    required this.code,
     required this.chatPort,
     this.version = protocolVersion,
   });
@@ -31,7 +35,8 @@ class DiscoveryMessage {
   Map<String, dynamic> toJson() => {
         'v': version,
         'type': type.toWire(),
-        'hostName': hostName,
+        'connectionName': connectionName,
+        'code': code,
         'chatPort': chatPort,
       };
 
@@ -48,7 +53,8 @@ class DiscoveryMessage {
       return DiscoveryMessage(
         version: json['v'] is int ? json['v'] as int : protocolVersion,
         type: typeWire == 'DISCOVER' ? DiscoveryMessageType.discover : DiscoveryMessageType.announce,
-        hostName: json['hostName'] as String? ?? '?',
+        connectionName: json['connectionName'] as String? ?? '?',
+        code: json['code'] as String? ?? '',
         chatPort: json['chatPort'] is int ? json['chatPort'] as int : 0,
       );
     } catch (_) {

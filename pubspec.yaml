@@ -1,7 +1,7 @@
 name: kena
 description: "Kena Connect — chat local sin Internet vía WebSocket."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: ^3.12.2
@@ -13,6 +13,12 @@ dependencies:
   shelf: ^1.4.2
   shelf_web_socket: ^3.0.0
   web_socket_channel: ^3.0.3
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.4.0
+  shared_preferences: ^2.5.5
+  flutter_local_notifications: ^22.3.0
+  connectivity_plus: ^7.3.1
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:
@@ -22,3 +28,11 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  fonts:
+    - family: Fraunces Kena
+      fonts:
+        - asset: assets/fonts/Fraunces-Variable.ttf
+    - family: Manrope Kena
+      fonts:
+        - asset: assets/fonts/Manrope-Variable.ttf

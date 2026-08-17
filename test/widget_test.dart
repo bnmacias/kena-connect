@@ -1,13 +1,17 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:kena/main.dart';
 
 void main() {
-  testWidgets('Muestra la pantalla de selección de modo Host/Cliente',
-      (WidgetTester tester) async {
-    await tester.pumpWidget(const KenaApp());
+  testWidgets('Arranca en Inicio con las dos acciones principales', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({'kena.seenOnboarding': true});
 
-    expect(find.text('Modo Host'), findsOneWidget);
-    expect(find.text('Modo Cliente'), findsOneWidget);
+    await tester.pumpWidget(const KenaApp());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Kena Connect'), findsOneWidget);
+    expect(find.text('Crear una sala'), findsOneWidget);
+    expect(find.text('Unirme a una sala'), findsOneWidget);
   });
 }

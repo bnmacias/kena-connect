@@ -3,15 +3,20 @@ import 'dart:io';
 
 import '../protocol/discovery_message.dart';
 
-/// Corre en el host: escucha pedidos DISCOVER por UDP broadcast y responde
-/// (unicast, directo al que preguntó) con la IP:puerto del servidor de
-/// chat, para que el cliente no tenga que tipearla a mano.
+/// Corre en el dispositivo que crea la conexión: escucha pedidos DISCOVER
+/// por UDP broadcast y responde (unicast, directo al que preguntó) con el
+/// nombre/código de la conexión y el puerto de chat, para que quien se
+/// une no tenga que tipear nada a mano.
 class HostDiscoveryResponder {
   RawDatagramSocket? _socket;
 
   bool get isRunning => _socket != null;
 
-  Future<void> start({required String hostName, required int chatPort}) async {
+  Future<void> start({
+    required String connectionName,
+    required String code,
+    required int chatPort,
+  }) async {
     if (_socket != null) return;
 
     final socket = await RawDatagramSocket.bind(
@@ -31,7 +36,8 @@ class HostDiscoveryResponder {
 
       final reply = DiscoveryMessage(
         type: DiscoveryMessageType.announce,
-        hostName: hostName,
+        connectionName: connectionName,
+        code: code,
         chatPort: chatPort,
       );
       socket.send(utf8.encode(reply.encode()), datagram.address, datagram.port);

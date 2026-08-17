@@ -1,0 +1,63 @@
+import 'package:flutter/services.dart';
+
+/// No se pudo unir el dispositivo a la red del anfitrión — por SO no
+/// soportado (menor a Android 10, u otra plataforma), el usuario canceló
+/// el diálogo de confirmación del sistema, o la red ya no está disponible.
+/// Quien llama debe caer a un flujo manual (mostrar SSID/contraseña para
+/// que el usuario los tipee él mismo en Ajustes Wi-Fi), nunca tratarlo
+/// como error fatal.
+class WifiJoinUnavailable implements Exception {
+  final String reason;
+  const WifiJoinUnavailable(this.reason);
+
+  @override
+  String toString() => reason;
+}
+
+/// Wrapper del canal nativo `kena/wifi_join` (`MainActivity.kt`): une este
+/// dispositivo, como cliente, a una red Wi-Fi conocida por SSID+contraseña
+/// sin que el usuario tenga que ir a Ajustes ni tipear nada — resuelve el
+/// caso "escaneé el QR del anfitrión, que armó su propio hotspot, y no
+/// tengo forma de saber la contraseña para conectarme a mano" (ver
+/// `LocalHotspot`, el lado que arma esa red, y `LobbyScreen`, que la
+/// codifica en el QR).
+///
+/// Sólo Android 10+ (`WifiNetworkSpecifier`, la API que Google agregó
+/// específicamente para este tipo de conexión "de compañero de app", sin
+/// exigir permiso de ubicación). Android igual muestra un diálogo pidiendo
+/// confirmar la conexión a esa red puntual — es una protección de
+/// privacidad del sistema que ninguna app puede saltear —, pero nunca pide
+/// la contraseña: ya viaja en el pedido.
+class WifiJoiner {
+  WifiJoiner._();
+
+  static const _channel = MethodChannel('kena/wifi_join');
+
+  static Future<void> join(String ssid, String password) async {
+    try {
+      await _channel.invokeMethod('join', {'ssid': ssid, 'password': password}).timeout(
+        const Duration(seconds: 22),
+        onTimeout: () => throw const WifiJoinUnavailable('El sistema no respondió a tiempo.'),
+      );
+    } on MissingPluginException {
+      throw const WifiJoinUnavailable('No soportado en esta plataforma.');
+    } on PlatformException catch (e) {
+      throw WifiJoinUnavailable(e.message ?? e.code);
+    }
+  }
+
+  /// Libera la red pedida y desata el proceso de ella
+  /// (`bindProcessToNetwork(null)` del lado nativo) para que el resto de
+  /// la app vuelva a salir por la red normal del teléfono. Hay que
+  /// llamarlo al salir de la sala de verdad, no sólo al cerrar el socket
+  /// del chat — mientras no se llame, TODO el tráfico de red de la app
+  /// (no sólo el chat) queda atado a una red sin Internet. Seguro de
+  /// llamar aunque nunca se haya unido nada (no-op del lado nativo).
+  static Future<void> leave() async {
+    try {
+      await _channel.invokeMethod('leave');
+    } catch (_) {
+      // Nunca debería bloquear la salida de la sala por esto.
+    }
+  }
+}
